@@ -12,8 +12,9 @@ RUN shards install --production
 COPY ./src/ ./src/
 # TODO: .git folder is required for building – this is destructive.
 # See definition of CURRENT_BRANCH, CURRENT_COMMIT and CURRENT_VERSION.
-COPY ./.git/ ./.git/
-
+ARG CURRENT_COMMIT=0000000
+ARG CURRENT_BRANCH=main
+ARG CURRENT_VERSION=0.0.1
 # Required for fetching player dependencies
 COPY ./scripts/ ./scripts/
 COPY ./assets/ ./assets/
