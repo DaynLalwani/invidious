@@ -1,53 +1,65 @@
-FROM crystallang/crystal:1.16.3-alpine AS builder
+# Builder
+FROM crystallang/crystal:1.16.3 AS builder
 
-RUN apk add --no-cache sqlite-static yaml-static
-
-ARG release
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    libxml2-dev \
+    liblzma-dev \
+    libyaml-dev \
+    libsqlite3-dev \
+    build-essential \
+    git \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /invidious
-COPY ./shard.yml ./shard.yml
-COPY ./shard.lock ./shard.lock
+
+# Shards
+COPY ./shard.yml ./shard.lock ./
 RUN shards install --production
 
+# Copy source
 COPY ./src/ ./src/
-# TODO: .git folder is required for building – this is destructive.
-# See definition of CURRENT_BRANCH, CURRENT_COMMIT and CURRENT_VERSION.
-ARG CURRENT_COMMIT=0000000
-ARG CURRENT_BRANCH=main
-ARG CURRENT_VERSION=0.0.1
-# Required for fetching player dependencies
 COPY ./scripts/ ./scripts/
 COPY ./assets/ ./assets/
 COPY ./videojs-dependencies.yml ./videojs-dependencies.yml
 
-RUN crystal spec --warnings all \
-    --link-flags "-lxml2 -llzma"    
-RUN --mount=type=cache,target=/root/.cache/crystal if [[ "${release}" == 1 ]] ; then \
-        crystal build ./src/invidious.cr \
-        --release \
-        --static --warnings all \
-        --link-flags "-lxml2 -llzma"; \
+# Optional: set version info
+ARG CURRENT_COMMIT=0000000
+ARG CURRENT_BRANCH=main
+ARG CURRENT_VERSION=0.0.1
+
+# Build
+ARG release=1
+RUN if [ "$release" -eq 1 ]; then \
+        crystal build ./src/invidious.cr --release --warnings all --link-flags "-lxml2 -llzma"; \
     else \
-        crystal build ./src/invidious.cr \
-        --static --warnings all \
-        --link-flags "-lxml2 -llzma"; \
+        crystal build ./src/invidious.cr --warnings all --link-flags "-lxml2 -llzma"; \
     fi
 
-FROM alpine:3.21
-RUN apk add --no-cache rsvg-convert ttf-opensans tini tzdata
+# Runtime image
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    librsvg2-bin \
+    fonts-dejavu \
+    tini \
+    tzdata \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /invidious
-RUN addgroup -g 1000 -S invidious && \
-    adduser -u 1000 -S invidious -G invidious
+RUN addgroup --system invidious && adduser --system --ingroup invidious invidious
+
+# Copy runtime files
 COPY --chown=invidious ./config/config.* ./config/
 RUN mv -n config/config.example.yml config/config.yml
-RUN sed -i 's/host: \(127.0.0.1\|localhost\)/host: invidious-db/' config/config.yml
 COPY ./config/sql/ ./config/sql/
 COPY ./locales/ ./locales/
 COPY --from=builder /invidious/assets ./assets/
 COPY --from=builder /invidious/invidious .
+
 RUN chmod o+rX -R ./assets ./config ./locales
 
 EXPOSE 3000
 USER invidious
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD [ "/invidious/invidious" ]
