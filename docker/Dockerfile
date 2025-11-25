@@ -3,7 +3,7 @@
 # --------------------------
 FROM crystallang/crystal:1.16.3 AS builder
 
-# Install required system dependencies
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     libxml2-dev \
     liblzma-dev \
@@ -20,36 +20,27 @@ WORKDIR /invidious
 COPY ./shard.yml ./shard.lock ./
 RUN shards install --production
 
-# Copy source and scripts
+# Copy source, scripts, assets
 COPY ./src/ ./src/
 COPY ./scripts/ ./scripts/
 COPY ./assets/ ./assets/
 COPY ./videojs-dependencies.yml ./videojs-dependencies.yml
 
 # --------------------------
-# Default Git info (no .git required)
+# Set default Git info
 # --------------------------
-ARG release=1
 ENV CURRENT_COMMIT=0000000
 ENV CURRENT_BRANCH=main
 ENV CURRENT_VERSION=0.0.1
+ENV RELEASE=1
 
-# Build Invidious binary
-RUN if [ "$release" -eq 1 ]; then \
-        crystal build ./src/invidious.cr \
-        --release --warnings all \
-        --define CURRENT_COMMIT=\"$CURRENT_COMMIT\" \
-        --define CURRENT_BRANCH=\"$CURRENT_BRANCH\" \
-        --define CURRENT_VERSION=\"$CURRENT_VERSION\" \
-        --link-flags "-lxml2 -llzma"; \
-    else \
-        crystal build ./src/invidious.cr \
-        --warnings all \
-        --define CURRENT_COMMIT=\"$CURRENT_COMMIT\" \
-        --define CURRENT_BRANCH=\"$CURRENT_BRANCH\" \
-        --define CURRENT_VERSION=\"$CURRENT_VERSION\" \
-        --link-flags "-lxml2 -llzma"; \
-    fi
+# Build Invidious
+RUN crystal build ./src/invidious.cr \
+    --release --warnings all \
+    --define CURRENT_COMMIT=$CURRENT_COMMIT \
+    --define CURRENT_BRANCH=$CURRENT_BRANCH \
+    --define CURRENT_VERSION=$CURRENT_VERSION \
+    --link-flags "-lxml2 -llzma"
 
 # --------------------------
 # Runtime image
@@ -62,23 +53,42 @@ RUN apt-get update && apt-get install -y \
     fonts-dejavu \
     tini \
     tzdata \
+    postgresql-client \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /invidious
 
-# Add non-root user
+# Create non-root user
 RUN addgroup --system invidious && adduser --system --ingroup invidious invidious
 
-# Copy config and runtime files
+# Copy config and locales
 COPY --chown=invidious ./config/config.* ./config/
 RUN mv -n config/config.example.yml config/config.yml
 COPY ./config/sql/ ./config/sql/
 COPY ./locales/ ./locales/
+
+# Copy built assets and binary
 COPY --from=builder /invidious/assets ./assets/
 COPY --from=builder /invidious/invidious .
 
 # Set permissions
 RUN chmod o+rX -R ./assets ./config ./locales
+
+# --------------------------
+# Configure database via environment variables
+# --------------------------
+ENV DB_HOST=invidious-db
+ENV DB_PORT=5432
+ENV DB_USER=postgres
+ENV DB_PASSWORD=postgres
+ENV DB_NAME=invidious
+
+# Patch config.yml at runtime to use env variables
+RUN sed -i "s/host:.*/host: ${DB_HOST}/" config/config.yml && \
+    sed -i "s/dbname:.*/dbname: ${DB_NAME}/" config/config.yml && \
+    sed -i "s/user:.*/user: ${DB_USER}/" config/config.yml && \
+    sed -i "s/password:.*/password: ${DB_PASSWORD}/" config/config.yml && \
+    sed -i "s/port:.*/port: ${DB_PORT}/" config/config.yml
 
 # Expose port
 EXPOSE 3000
